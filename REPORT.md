@@ -449,7 +449,7 @@ run. Build B is what *every* build would look like.
 
 ## Part 26 — Failure analysis
 
-Three failures were reproduced and diagnosed. The first was genuine and was
+Four failures were reproduced and diagnosed. The first was genuine and was
 caught by CI rather than staged.
 
 ### Failure 1 — Failed pytest, import error in CI only
@@ -478,7 +478,26 @@ distinction that matters when a test goes red: the failure identifies a
 disagreement between test and code, and deciding which one is wrong is a
 judgement the pipeline cannot make for you.
 
-### Failure 3 — Application bound to 127.0.0.1
+### Failure 3 — Docker build fails while every test passes
+
+| | |
+|---|---|
+| **Symptom** | Pull request CI red on the build job while the test job was green. |
+| **Root cause** | `COPY tests/ ./tests/` was added to the Dockerfile. `tests` is listed in `.dockerignore`, so it is not part of the build context and the copy can never resolve. |
+| **Evidence** | Locally: `COPY failed: file not found in build context or excluded by .dockerignore: stat tests/: file does not exist`. In CI, BuildKit reports the same fault as `failed to compute cache key ... "/tests": not found`. Run `34495438775`, `Unit tests: success`, `Docker build validation: failure`. |
+| **Correction** | Removed the `COPY`. The test suite belongs in CI, not in the runtime image. |
+
+This satisfies the second half of the required CI behaviour in Part 5. Failure 2
+proved a failing `pytest` blocks a pull request. This one proves a failing
+`docker build` does the same, with the tests passing throughout, so the two gates
+are demonstrably independent.
+
+The two error messages are worth comparing. The local legacy builder names the
+cause outright and mentions `.dockerignore`. BuildKit, which is what CI uses,
+reports only that a path was not found, which sends you looking for a missing
+directory that is in fact present in the repository.
+
+### Failure 4 — Application bound to 127.0.0.1
 
 | | |
 |---|---|
