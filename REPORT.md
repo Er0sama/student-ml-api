@@ -7,6 +7,30 @@ Viva answers are in [VIVA.md](VIVA.md).
 
 ---
 
+## Part 6 — Deliberate CI failure
+
+The health assertion was changed to `assert data["status"] == "wrong"` and
+pushed to the open pull request.
+
+**Result: pull request CI failed.** Run `34439612151`:
+
+```
+tests/test_app.py::test_health FAILED                                    [ 25%]
+>       assert data["status"] == "wrong"
+E       AssertionError: assert 'healthy' == 'wrong'
+FAILED tests/test_app.py::test_health - AssertionError: assert 'healthy' == 'wrong'
+========================= 1 failed, 3 passed in 0.16s ==========================
+```
+
+Two things are worth noting. The `Docker build validation` job reported
+`skipping` rather than running, because it declares `needs: test` and a failed
+dependency short-circuits it. That saves roughly 20 seconds of build time on
+every broken pull request. Secondly, the merge button was blocked, because
+`Unit tests` is a required status check under branch protection.
+
+The assertion was then restored and committed as `fix: correct health endpoint
+test`. Both jobs passed on the next run.
+
 ## Part 7 — Branch protection settings on `main`
 
 | Setting | Value | Reason |
@@ -137,5 +161,52 @@ run. Build B is what *every* build would look like.
 
 ## Part 26 — Failure analysis
 
-*(Completed as the failures are reproduced. See below.)*
+Three failures were reproduced and diagnosed. The first was genuine and was
+caught by CI rather than staged.
 
+### Failure 1 — Failed pytest, import error in CI only
+
+| | |
+|---|---|
+| **Symptom** | All four tests passed locally, but the first CI run failed during collection, before any test executed. |
+| **Root cause** | Tests were run locally as `python -m pytest`, which prepends the working directory to `sys.path`. CI runs bare `pytest`, which does not. With no `conftest.py` or path configuration, `app.py` at the repository root was not importable. |
+| **Evidence** | `ModuleNotFoundError: No module named 'app'` at `tests/test_app.py:3`, `collected 0 items / 1 error`, exit code 2. Run `34439430980`. |
+| **Correction** | Added `pytest.ini` setting `pythonpath = .`, which makes both invocation styles resolve imports identically. |
+
+The lesson is that a local pass is not proof. The two environments differed in
+one invocation detail, and only CI ran the command the way a fresh machine would.
+
+### Failure 2 — Failed pytest, incorrect assertion
+
+| | |
+|---|---|
+| **Symptom** | Pull request CI red, one of four tests failing, merge blocked. |
+| **Root cause** | The test asserted a health status of `wrong` while the application correctly returns `healthy`. The test was wrong, not the application. |
+| **Evidence** | `AssertionError: assert 'healthy' == 'wrong'`, run `34439612151`. |
+| **Correction** | Restored the assertion to `healthy`, committed as `fix: correct health endpoint test`. |
+
+This is the deliberate failure required by Part 6. It also demonstrates the
+distinction that matters when a test goes red: the failure identifies a
+disagreement between test and code, and deciding which one is wrong is a
+judgement the pipeline cannot make for you.
+
+### Failure 3 — Application bound to 127.0.0.1
+
+| | |
+|---|---|
+| **Symptom** | The container started, stayed healthy and published its port, but `curl http://localhost:5001/health` failed with exit code 56, connection reset by peer. Nothing appeared in the logs, because no request ever arrived. |
+| **Root cause** | The server was bound to `127.0.0.1:5000`, which inside a container means the container's own loopback interface. Traffic arriving from the host through the published port targets the container's external interface, where nothing is listening. Docker forwards the packet correctly and the container refuses it. |
+| **Evidence** | `docker ps` showed `Up 4 seconds  0.0.0.0:5001->5000/tcp`, so the port mapping was correct. `docker logs` showed `Listening at: http://127.0.0.1:5000`. The decisive test was running the request from inside the container, which succeeded and returned the normal healthy payload while the same request from the host failed. |
+| **Correction** | Bind to `0.0.0.0:5000`, which is what the committed `Dockerfile` does. |
+
+This failure is worth understanding because every surface-level signal looks
+correct. The container is running, the port mapping is right, the image built
+cleanly and the application has not crashed. Only the bind address is wrong, and
+the only place it is visible is the startup log line.
+
+An additional trap was encountered while reproducing this. The first attempt
+mapped the broken container to port 5000, which was still held by the working
+container from Part 10. Docker refused to start it, and the subsequent `curl`
+returned a healthy response from the *old* container, which looks exactly like
+a pass. Publishing to 5001 instead made the real behaviour visible. A green
+check against the wrong process is more dangerous than a red one.
