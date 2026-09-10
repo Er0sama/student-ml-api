@@ -1,0 +1,212 @@
+# Assignment Report — student-ml-api
+
+Repository: `https://github.com/Er0sama/student-ml-api`
+Registry: `ghcr.io/er0sama/student-ml-api`
+
+Viva answers are in [VIVA.md](VIVA.md).
+
+---
+
+## Part 6 — Deliberate CI failure
+
+The health assertion was changed to `assert data["status"] == "wrong"` and
+pushed to the open pull request.
+
+**Result: pull request CI failed.** Run `34439612151`:
+
+```
+tests/test_app.py::test_health FAILED                                    [ 25%]
+>       assert data["status"] == "wrong"
+E       AssertionError: assert 'healthy' == 'wrong'
+FAILED tests/test_app.py::test_health - AssertionError: assert 'healthy' == 'wrong'
+========================= 1 failed, 3 passed in 0.16s ==========================
+```
+
+Two things are worth noting. The `Docker build validation` job reported
+`skipping` rather than running, because it declares `needs: test` and a failed
+dependency short-circuits it. That saves roughly 20 seconds of build time on
+every broken pull request. Secondly, the merge button was blocked, because
+`Unit tests` is a required status check under branch protection.
+
+The assertion was then restored and committed as `fix: correct health endpoint
+test`. Both jobs passed on the next run.
+
+## Part 7 — Branch protection settings on `main`
+
+| Setting | Value | Reason |
+|---|---|---|
+| Require a pull request before merging | Enabled | Blocks direct pushes, forces the review path |
+| Required approvals | 1 | A second pair of eyes before code enters `main` |
+| Require status checks to pass | Enabled | A red pipeline cannot be merged |
+| Required checks | `Unit tests`, `Docker build validation` | Both CI jobs must be green |
+| Require branches to be up to date | Enabled | Prevents two individually-green branches breaking `main` together |
+| Require conversation resolution | Enabled | Review comments cannot be silently ignored |
+| Allow force pushes | Disabled | History on `main` stays immutable |
+| Allow deletions | Disabled | `main` cannot be removed accidentally |
+| Enforce for administrators | Enabled | The rules apply to the repository owner too |
+
+The last one matters most on a solo repository. Without it, the owner can
+bypass every rule above, and the protection becomes decorative.
+
+*Note: on a single-owner repository the required approval is satisfied by
+disabling that one rule, since GitHub does not allow self-approval. This is
+recorded here as a deliberate, documented deviation rather than an oversight.*
+
+## Part 8 — Merge strategy
+
+**Selected: squash and merge.**
+
+Each feature branch here represents one logical unit of work, split across
+several small commits made while developing. Squashing gives `main` a history
+where one commit equals one feature, which makes the log readable and makes
+`git revert` a single safe operation. The individual development commits remain
+visible in the pull request itself, so nothing is lost.
+
+Merge commits were rejected because they clutter the history of a small project
+with noise. Rebase merging was rejected because it replays every intermediate
+commit onto `main`, including work-in-progress states that never passed CI on
+their own.
+
+## Part 10 — Local build and run
+
+```bash
+docker build -t student-ml-api:1.0.0 .
+docker run -d --name student-ml-api -p 5000:5000 student-ml-api:1.0.0
+curl http://localhost:5000/health
+```
+
+Response:
+
+```json
+{"application":"student-ml-api","status":"healthy","version":"1.0.0"}
+```
+
+The version comes from the `VERSION` file, which is read at import time, so the
+container cannot report a version that disagrees with the artifact.
+
+## Part 11 — Image and container inspection
+
+| Item | Value |
+|---|---|
+| Container ID | `24f5ef1407a1` |
+| Image ID | `efd074f58995` |
+| Exposed port | `5000/tcp`, published as `0.0.0.0:5000->5000/tcp` |
+| Running command | `gunicorn --bind 0.0.0.0:5000 app:app` |
+| Working directory | `/app` |
+
+`docker logs student-ml-api` confirms the bind address:
+
+```
+[INFO] Starting gunicorn 23.0.0
+[INFO] Listening at: http://0.0.0.0:5000 (1)
+[INFO] Using worker: sync
+[INFO] Booting worker with pid: 7
+```
+
+`docker exec -it student-ml-api sh` lands in `/app` containing `VERSION`,
+`app.py` and `requirements.txt`. The `tests/` directory and `.git` are absent,
+confirming `.dockerignore` is being applied.
+
+## Part 22 — Why publishing images from every pull request is undesirable
+
+- **A proposal is not a release.** A pull request is a request for discussion.
+  Publishing from it puts unreviewed code in the place where deployments are
+  pulled from.
+- **Registry pollution.** Every push to every open branch would create an image.
+  Finding the real releases among them becomes guesswork.
+- **Version ambiguity.** Pull request builds have no meaningful version, so they
+  end up on `latest` or on invented tags, and `latest` stops meaning the newest
+  release.
+- **Credential exposure.** Publishing requires write credentials. Granting them
+  to a workflow that runs arbitrary branch code, including from forks, is a
+  serious escalation path.
+- **Cost and noise.** Storage and bandwidth for artifacts nobody will deploy.
+
+CI proves the image *can* be built. Only a tag decides that it *should* be
+published.
+
+## Part 25 — Docker layer cache comparison
+
+Two rebuilds were performed against a warm cache.
+
+**Build A, only `app.py` modified:**
+
+```
+Step 7/11 : COPY requirements.txt .          ---> Using cache
+Step 8/11 : RUN pip install --no-cache-dir   ---> Using cache
+Step 9/11 : COPY VERSION app.py ./           ---> rebuilt
+```
+
+**Build B, only `requirements.txt` modified:**
+
+```
+Step 7/11 : COPY requirements.txt .          ---> rebuilt
+Step 8/11 : RUN pip install --no-cache-dir   ---> rebuilt (Running in 390bcb4e7664)
+Step 9/11 : COPY VERSION app.py ./           ---> rebuilt
+```
+
+Layers 1 to 6, the base image, build arguments, labels and `WORKDIR`, were
+cached in both builds.
+
+**Why the ordering matters.** Docker invalidates a layer when its inputs change,
+and every subsequent layer with it. Source code changes on every commit;
+dependencies change rarely. Copying `requirements.txt` alone and installing
+before copying source means the expensive install layer survives ordinary code
+changes, as Build A shows.
+
+The alternative, `COPY . .` followed by `RUN pip install`, makes the
+dependency layer depend on every file in the project. Editing one line of
+`app.py` would then reinstall every dependency, on every commit, in every CI
+run. Build B is what *every* build would look like.
+
+## Part 26 — Failure analysis
+
+Three failures were reproduced and diagnosed. The first was genuine and was
+caught by CI rather than staged.
+
+### Failure 1 — Failed pytest, import error in CI only
+
+| | |
+|---|---|
+| **Symptom** | All four tests passed locally, but the first CI run failed during collection, before any test executed. |
+| **Root cause** | Tests were run locally as `python -m pytest`, which prepends the working directory to `sys.path`. CI runs bare `pytest`, which does not. With no `conftest.py` or path configuration, `app.py` at the repository root was not importable. |
+| **Evidence** | `ModuleNotFoundError: No module named 'app'` at `tests/test_app.py:3`, `collected 0 items / 1 error`, exit code 2. Run `34439430980`. |
+| **Correction** | Added `pytest.ini` setting `pythonpath = .`, which makes both invocation styles resolve imports identically. |
+
+The lesson is that a local pass is not proof. The two environments differed in
+one invocation detail, and only CI ran the command the way a fresh machine would.
+
+### Failure 2 — Failed pytest, incorrect assertion
+
+| | |
+|---|---|
+| **Symptom** | Pull request CI red, one of four tests failing, merge blocked. |
+| **Root cause** | The test asserted a health status of `wrong` while the application correctly returns `healthy`. The test was wrong, not the application. |
+| **Evidence** | `AssertionError: assert 'healthy' == 'wrong'`, run `34439612151`. |
+| **Correction** | Restored the assertion to `healthy`, committed as `fix: correct health endpoint test`. |
+
+This is the deliberate failure required by Part 6. It also demonstrates the
+distinction that matters when a test goes red: the failure identifies a
+disagreement between test and code, and deciding which one is wrong is a
+judgement the pipeline cannot make for you.
+
+### Failure 3 — Application bound to 127.0.0.1
+
+| | |
+|---|---|
+| **Symptom** | The container started, stayed healthy and published its port, but `curl http://localhost:5001/health` failed with exit code 56, connection reset by peer. Nothing appeared in the logs, because no request ever arrived. |
+| **Root cause** | The server was bound to `127.0.0.1:5000`, which inside a container means the container's own loopback interface. Traffic arriving from the host through the published port targets the container's external interface, where nothing is listening. Docker forwards the packet correctly and the container refuses it. |
+| **Evidence** | `docker ps` showed `Up 4 seconds  0.0.0.0:5001->5000/tcp`, so the port mapping was correct. `docker logs` showed `Listening at: http://127.0.0.1:5000`. The decisive test was running the request from inside the container, which succeeded and returned the normal healthy payload while the same request from the host failed. |
+| **Correction** | Bind to `0.0.0.0:5000`, which is what the committed `Dockerfile` does. |
+
+This failure is worth understanding because every surface-level signal looks
+correct. The container is running, the port mapping is right, the image built
+cleanly and the application has not crashed. Only the bind address is wrong, and
+the only place it is visible is the startup log line.
+
+An additional trap was encountered while reproducing this. The first attempt
+mapped the broken container to port 5000, which was still held by the working
+container from Part 10. Docker refused to start it, and the subsequent `curl`
+returned a healthy response from the *old* container, which looks exactly like
+a pass. Publishing to 5001 instead made the real behaviour visible. A green
+check against the wrong process is more dangerous than a red one.
