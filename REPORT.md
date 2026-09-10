@@ -233,3 +233,96 @@ container from Part 10. Docker refused to start it, and the subsequent `curl`
 returned a healthy response from the *old* container, which looks exactly like
 a pass. Publishing to 5001 instead made the real behaviour visible. A green
 check against the wrong process is more dangerous than a red one.
+
+## Part 16 — Registry verification (1.0.0)
+
+The release workflow for tag `v1.0.0` (run `34440046729`) derived the version
+from the tag and published three tags pointing at one image:
+
+```
+ghcr.io/er0sama/student-ml-api:1.0.0
+ghcr.io/er0sama/student-ml-api:latest
+ghcr.io/er0sama/student-ml-api:fa0bcc7
+```
+
+Workflow log confirming the version was derived, not hard-coded:
+
+```
+Releasing version 1.0.0
+```
+
+**Image digest:** `sha256:4ecd42add56374eb92285952695ac2fb74cdcf6f63678f3156548a86d9e0a5f6`
+
+The package inherits the repository's public visibility, so it can be pulled
+anonymously without a token.
+
+## Part 17 — Artifact reproducibility
+
+The local images were deleted, leaving nothing on the build machine:
+
+```bash
+docker rm -f student-ml-api
+docker rmi -f student-ml-api:1.0.0 ghcr.io/er0sama/student-ml-api:1.0.0
+docker images | grep student-ml-api   # no results
+```
+
+The image was then retrieved from the registry and started, with no build step
+and no source code involved:
+
+```bash
+docker pull ghcr.io/er0sama/student-ml-api:1.0.0
+docker run -d --name student-ml-api -p 5000:5000 ghcr.io/er0sama/student-ml-api:1.0.0
+curl http://localhost:5000/health
+```
+
+```
+Digest: sha256:4ecd42add56374eb92285952695ac2fb74cdcf6f63678f3156548a86d9e0a5f6
+{"application":"student-ml-api","status":"healthy","version":"1.0.0"}
+```
+
+The digest of the pulled image matches the digest reported by the workflow that
+built it. That equality is the actual proof. It shows the bytes running here are
+the same bytes the pipeline tested, rather than a rebuild that merely resembles
+them.
+
+## Part 23 — Image metadata
+
+`docker inspect ghcr.io/er0sama/student-ml-api:1.0.0` returns:
+
+```
+org.opencontainers.image.title=student-ml-api
+org.opencontainers.image.description=Minimal prediction API for the MLOps CI/CD exercise
+org.opencontainers.image.version=1.0.0
+org.opencontainers.image.revision=fa0bcc7bd832a333147acb8a162795efc6290336
+org.opencontainers.image.source=https://github.com/Er0sama/student-ml-api
+org.opencontainers.image.created=
+```
+
+The `revision` label is the important one. Given only a running container, it
+identifies the exact commit that produced the image, without consulting the
+registry or the repository.
+
+**A defect was found here.** The `created` label published empty on 1.0.0. The
+build argument referenced `github.run_started_at`, which is not part of the
+GitHub context, so it expanded to an empty string and silently overrode the
+`ARG` default. This is a good illustration of why metadata must be verified on a
+pulled artifact rather than assumed from the workflow source. The build did not
+fail, CI did not complain, and the label was simply blank. It was corrected in
+`2c2788f` on the 1.1.0 branch by generating the timestamp inside the workflow,
+and the fix is confirmed against the 1.1.0 image below.
+
+## Part 24 — Commit SHA image tag
+
+Every release also publishes the image under its short commit SHA, verified as
+pullable:
+
+```bash
+docker pull ghcr.io/er0sama/student-ml-api:fa0bcc7
+```
+
+**Why this is useful.** Semantic version tags describe intent, but several
+different builds can carry the same intent during development, and `latest`
+moves. A commit tag is unambiguous and permanent. It lets you deploy an exact
+commit that has no release version yet, for example to reproduce a bug report,
+and it gives monitoring and incident tooling a single identifier that maps
+directly back to source without a lookup table.
