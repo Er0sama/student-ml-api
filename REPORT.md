@@ -48,6 +48,25 @@ test`. Both jobs passed on the next run.
 The last one matters most on a solo repository. Without it, the owner can
 bypass every rule above, and the protection becomes decorative.
 
+### Verification
+
+The rules were tested rather than assumed. An empty commit was pushed directly
+to `main` by the repository owner:
+
+```
+remote: error: GH006: Protected branch update failed for refs/heads/main.
+ ! [remote rejected] main -> main (protected branch hook declined)
+error: failed to push some refs
+```
+
+The push was rejected. Because `enforce_admins` is enabled, the owner has no
+bypass, which is the only configuration under which the rule means anything on a
+single-maintainer repository.
+
+The `required_conversation_resolution` rule was also exercised in practice. Pull
+request #1 could not be merged while automated review threads were open, which
+forced the feedback to be addressed rather than ignored.
+
 *Note: on a single-owner repository the required approval is satisfied by
 disabling that one rule, since GitHub does not allow self-approval. This is
 recorded here as a deliberate, documented deviation rather than an oversight.*
