@@ -67,6 +67,29 @@ with noise. Rebase merging was rejected because it replays every intermediate
 commit onto `main`, including work-in-progress states that never passed CI on
 their own.
 
+The effect is visible in this repository. Pull request #1 contained ten commits,
+including the deliberately broken test and its fix. On `main` that became a
+single commit, `fa0bcc7`, while the full development history remains readable in
+the pull request itself.
+
+### Review response
+
+Pull request #1 received six automated review comments. Three identified real
+defects and were fixed in `ef8b777` before merging:
+
+- `/predict` returned HTTP 500 rather than 400 for a JSON body that parsed but
+  was not an object. A list such as `["value"]` satisfied the `in` membership
+  check and then raised `TypeError` on subscript. A fifth test now covers it.
+- The CI smoke-test container was removed only on the success path, so a failed
+  health check leaked a container into subsequent steps. Cleanup is now trapped
+  on exit.
+- The OCI `created` label used the repository's last-updated timestamp, which
+  can differ from the build time for the same commit. It now uses
+  `github.run_started_at`.
+
+Merging was initially blocked by the `required_conversation_resolution` rule
+while these threads were open, which is the rule working as intended.
+
 ## Part 10 — Local build and run
 
 ```bash
