@@ -19,7 +19,8 @@ def test_health(client):
     assert response.status_code == 200
     assert data["status"] == "healthy"
     assert data["application"] == "student-ml-api"
-    assert data["version"] == Path("VERSION").read_text().strip()
+    assert data["application_version"] == Path("VERSION").read_text().strip()
+    assert data["model_version"] == "model-1"
 
 
 def test_predict_success(client):
