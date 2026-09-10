@@ -19,7 +19,6 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY VERSION app.py ./
-COPY tests/ ./tests/
 
 EXPOSE 5000
 
