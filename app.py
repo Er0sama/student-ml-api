@@ -4,6 +4,10 @@ from flask import Flask, jsonify, request
 
 APP_NAME = "student-ml-api"
 
+# The served model is versioned independently of the application, so that a
+# model swap and a code change can be told apart after the fact.
+MODEL_VERSION = "model-1"
+
 with open(os.path.join(os.path.dirname(__file__), "VERSION")) as fh:
     VERSION = fh.read().strip()
 
@@ -12,7 +16,12 @@ app = Flask(__name__)
 
 @app.get("/health")
 def health():
-    return jsonify(status="healthy", application=APP_NAME, version=VERSION)
+    return jsonify(
+        status="healthy",
+        application=APP_NAME,
+        application_version=VERSION,
+        model_version=MODEL_VERSION,
+    )
 
 
 @app.post("/predict")
