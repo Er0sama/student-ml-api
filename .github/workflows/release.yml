@@ -39,6 +39,7 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "short_sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          echo "build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
           echo "Releasing version ${VERSION}"
 
       - name: Fail if the tag disagrees with the VERSION file
@@ -66,7 +67,7 @@ jobs:
           build-args: |
             APP_VERSION=${{ steps.version.outputs.version }}
             GIT_COMMIT=${{ github.sha }}
-            BUILD_DATE=${{ github.run_started_at }}
+            BUILD_DATE=${{ steps.version.outputs.build_date }}
           tags: |
             ${{ steps.image.outputs.name }}:${{ steps.version.outputs.version }}
             ${{ steps.image.outputs.name }}:latest
