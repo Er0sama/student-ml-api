@@ -17,7 +17,11 @@ def health():
 
 @app.post("/predict")
 def predict():
-    payload = request.get_json(silent=True) or {}
+    payload = request.get_json(silent=True)
+
+    # A JSON array or string is parseable but is not a request object.
+    if not isinstance(payload, dict):
+        return jsonify(error="request body must be a JSON object"), 400
 
     if "value" not in payload:
         return jsonify(error="missing required field: value"), 400

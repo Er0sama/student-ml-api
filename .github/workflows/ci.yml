@@ -40,9 +40,10 @@ jobs:
 
       - name: Smoke test the built image
         run: |
+          # Cleanup must run even if the health check fails, or the container leaks.
+          trap 'docker rm -f ci-check >/dev/null 2>&1 || true' EXIT
           docker run -d --name ci-check -p 5000:5000 student-ml-api:ci-${{ github.sha }}
           for i in $(seq 1 10); do
             curl -fsS http://localhost:5000/health && break || sleep 1
           done
           curl -fsS http://localhost:5000/health | grep healthy
-          docker rm -f ci-check

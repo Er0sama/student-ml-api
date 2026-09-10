@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from app import app
@@ -17,7 +19,7 @@ def test_health(client):
     assert response.status_code == 200
     assert data["status"] == "healthy"
     assert data["application"] == "student-ml-api"
-    assert data["version"] == open("VERSION").read().strip()
+    assert data["version"] == Path("VERSION").read_text().strip()
 
 
 def test_predict_success(client):
@@ -39,3 +41,10 @@ def test_predict_invalid_input(client):
 
     assert response.status_code == 400
     assert "number" in response.get_json()["error"]
+
+
+def test_predict_rejects_non_object_body(client):
+    response = client.post("/predict", json=["value"])
+
+    assert response.status_code == 400
+    assert "JSON object" in response.get_json()["error"]

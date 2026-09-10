@@ -66,7 +66,7 @@ jobs:
           build-args: |
             APP_VERSION=${{ steps.version.outputs.version }}
             GIT_COMMIT=${{ github.sha }}
-            BUILD_DATE=${{ github.event.repository.updated_at }}
+            BUILD_DATE=${{ github.run_started_at }}
           tags: |
             ${{ steps.image.outputs.name }}:${{ steps.version.outputs.version }}
             ${{ steps.image.outputs.name }}:latest
